@@ -13,20 +13,11 @@ public final class SkysoftSessionReader {
 
     private SkysoftSessionReader() {}
 
-    /**
-     * Reads Skysoft's actual Farming SESSION tracker directly.
-     *
-     * TastyFish intentionally does not maintain a second farming tracker or
-     * duplicate Skysoft's collection/profit logic. It reads Skysoft's own
-     * sessionStats map and calls Skysoft's own unitValue() method for pricing.
-     */
     public static Snapshot read() {
         try {
             Class<?> trackerClass = Class.forName(PROFIT_TRACKER_CLASS);
             Object tracker = trackerClass.getField("INSTANCE").get(null);
 
-            // Do not depend on a TastyFish mixin being applied. Skysoft is an
-            // optional dependency, so reflection is deliberately used here.
             Field sessionStatsField = findField(trackerClass, "sessionStats");
             sessionStatsField.setAccessible(true);
             Object rawStatsMap = sessionStatsField.get(tracker);
@@ -58,9 +49,6 @@ public final class SkysoftSessionReader {
                 }
             }
 
-            // Same calculation used by Skysoft's ProfitTracker HUD:
-            // revenue = valued item totals + tracker coins
-            // profit = revenue - the Coins cost bucket
             double coinCosts = costs.getOrDefault("Coins", 0L).doubleValue();
             double profit = itemValue + coins - coinCosts;
 
@@ -74,41 +62,41 @@ public final class SkysoftSessionReader {
     private static Object createFarmingTarget() throws ReflectiveOperationException {
         Class<?> targetClass = Class.forName(TARGET_CLASS);
         Class<?> presetClass = Class.forName(PRESET_CLASS);
-
         @SuppressWarnings("unchecked")
-        Object farmingPreset = Enum.valueOf(
-            (Class<? extends Enum>) presetClass.asSubclass(Enum.class),
-            FARMING
-        );
-
+        Object farmingPreset = Enum.valueOf((Class<? extends Enum>) presetClass.asSubclass(Enum.class), FARMING);
         Field companionField = targetClass.getField("Companion");
         Object companion = companionField.get(null);
         Method presetMethod = companion.getClass().getMethod("preset", presetClass);
         return presetMethod.invoke(companion, farmingPreset);
     }
 
-    private static Double skysoftUnitValue(
-        Class<?> trackerClass,
-        Object tracker,
-        Object target,
-        String itemId
-    ) throws ReflectiveOperationException {
-        Class<?> targetClass = Class.forName(TARGET_CLASS);
-        Method unitValue = trackerClass.getDeclaredMethod("unitValue", targetClass, String.class);
-        unitValue.setAccessible(true);
-        Object result = unitValue.invoke(tracker, target, itemId);
-        return result instanceof Number number ? number.doubleValue() : null;
+    private static Double skysoftUnitValue(Class<?> trackerClass, Object tracker, Object target, String itemId)
+        throws ReflectiveOperationException {
+        // Skysoft has changed the exact JVM signature of this Kotlin-internal
+        // helper between releases. Find the real method instead of assuming
+        // getDeclaredMethod() can resolve it from the source signature.
+        Class<?> current = trackerClass;
+        while (current != null) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (!method.getName().equals("unitValue") || method.getParameterCount() != 2) continue;
+                Class<?>[] parameters = method.getParameterTypes();
+                if (!parameters[1].equals(String.class) || !parameters[0].isInstance(target)) continue;
+                method.setAccessible(true);
+                Object result = method.invoke(tracker, target, itemId);
+                return result instanceof Number number ? number.doubleValue() : null;
+            }
+            current = current.getSuperclass();
+        }
+        throw new NoSuchMethodException("No compatible ProfitTracker.unitValue method found");
     }
 
     private static Map<String, Long> longMap(Object object, String fieldName) throws ReflectiveOperationException {
         Field field = findField(object.getClass(), fieldName);
         field.setAccessible(true);
         Object raw = field.get(object);
-
         if (!(raw instanceof Map<?, ?> source)) {
             throw new IllegalStateException("Skysoft field " + fieldName + " is not a Map");
         }
-
         Map<String, Long> result = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : source.entrySet()) {
             if (entry.getKey() instanceof String key && entry.getValue() instanceof Number value) {
@@ -152,9 +140,7 @@ public final class SkysoftSessionReader {
 
     private static String rootMessage(Throwable error) {
         Throwable current = error;
-        while (current.getCause() != null) {
-            current = current.getCause();
-        }
+        while (current.getCause() != null) current = current.getCause();
         String message = current.getMessage();
         return message == null ? current.toString() : message;
     }
