@@ -30,10 +30,6 @@ public final class FarmingUploader {
     private final AtomicBoolean authenticationInProgress = new AtomicBoolean(false);
     private final AtomicBoolean updateInProgress = new AtomicBoolean(false);
 
-    // Skysoft's profit value is cumulative for the current tracker session.
-    // Keep the last value we submitted so an unchanged cumulative profit is never
-    // uploaded twice. The server still receives the cumulative value when it
-    // actually changes, allowing its delta logic to count only the increase.
     private volatile String trackedSessionId;
     private volatile double lastSubmittedProfit = -1.0D;
 
@@ -51,12 +47,8 @@ public final class FarmingUploader {
             lastSubmittedProfit = -1.0D;
         }
 
-        // Never queue the same cumulative profit twice. This also protects against
-        // two ticks reading the same Skysoft value while an HTTP request is pending.
-        if (lastSubmittedProfit >= 0.0D && snapshot.profit() <= lastSubmittedProfit) {
-            return;
-        }
-
+        // Skysoft's profit is cumulative. Do not send the same value again.
+        if (lastSubmittedProfit >= 0.0D && snapshot.profit() <= lastSubmittedProfit) return;
         if (updateInProgress.get()) return;
 
         if (token == null || !username.equalsIgnoreCase(tokenUsername)
@@ -112,8 +104,6 @@ public final class FarmingUploader {
 
                         System.out.println("[TastyFish] Farming authentication successful.");
 
-                        // Establish the server-side baseline once for this session.
-                        // This zero update is intentionally NOT treated as farming profit.
                         if (!sessionId.equals(baselinedSessionId)) {
                             sendBaseline(config, username, uuid, profile, sessionId);
                             baselinedSessionId = sessionId;
@@ -171,7 +161,6 @@ public final class FarmingUploader {
         JsonObject root = new JsonObject();
         root.addProperty("username", username);
         root.addProperty("uuid", uuid);
-        root.addProperty("profile", uuid == null ? "" : uuid);
         root.addProperty("profile", profile == null ? "" : profile);
         root.addProperty("preset", "FARMING");
         root.addProperty("profit", snapshot.profit());
