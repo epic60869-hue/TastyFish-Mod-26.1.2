@@ -14,25 +14,29 @@ public final class SkysoftSessionReader {
     private SkysoftSessionReader() {}
 
     /**
-     * Reads the same Farming SESSION stats used by Skysoft's Profit Tracker HUD.
-     * When Skysoft is installed, TastyFish deliberately uses Skysoft's own
-     * unitValue() method rather than maintaining a second price calculation.
+     * Reads Skysoft's actual Farming SESSION tracker directly.
+     *
+     * TastyFish intentionally does not maintain a second farming tracker or
+     * duplicate Skysoft's collection/profit logic. It reads Skysoft's own
+     * sessionStats map and calls Skysoft's own unitValue() method for pricing.
      */
     public static Snapshot read() {
         try {
             Class<?> trackerClass = Class.forName(PROFIT_TRACKER_CLASS);
-            Field instanceField = trackerClass.getField("INSTANCE");
-            Object tracker = instanceField.get(null);
+            Object tracker = trackerClass.getField("INSTANCE").get(null);
 
-            if (!(tracker instanceof SkysoftProfitTrackerAccessor accessor)) {
-                System.err.println("[TastyFish] Skysoft ProfitTracker was found, but the TastyFish accessor mixin is not applied.");
+            // Do not depend on a TastyFish mixin being applied. Skysoft is an
+            // optional dependency, so reflection is deliberately used here.
+            Field sessionStatsField = findField(trackerClass, "sessionStats");
+            sessionStatsField.setAccessible(true);
+            Object rawStatsMap = sessionStatsField.get(tracker);
+
+            if (!(rawStatsMap instanceof Map<?, ?> source)) {
+                System.err.println("[TastyFish] Skysoft ProfitTracker sessionStats is not a Map.");
                 return Snapshot.empty();
             }
 
-            Map<String, ?> statsMap = accessor.tastyfish$getSessionStats();
-            if (statsMap == null) return Snapshot.empty();
-
-            Object stats = statsMap.get(FARMING);
+            Object stats = source.get(FARMING);
             if (stats == null) return Snapshot.empty();
 
             Map<String, Long> items = longMap(stats, "itemCounts");
@@ -54,9 +58,9 @@ public final class SkysoftSessionReader {
                 }
             }
 
-            // This matches ProfitTrackerHud's calculation:
-            // revenue = valued item totals + stats.coins
-            // profit = revenue - coin costs
+            // Same calculation used by Skysoft's ProfitTracker HUD:
+            // revenue = valued item totals + tracker coins
+            // profit = revenue - the Coins cost bucket
             double coinCosts = costs.getOrDefault("Coins", 0L).doubleValue();
             double profit = itemValue + coins - coinCosts;
 
@@ -70,8 +74,12 @@ public final class SkysoftSessionReader {
     private static Object createFarmingTarget() throws ReflectiveOperationException {
         Class<?> targetClass = Class.forName(TARGET_CLASS);
         Class<?> presetClass = Class.forName(PRESET_CLASS);
+
         @SuppressWarnings("unchecked")
-        Object farmingPreset = Enum.valueOf((Class<? extends Enum>) presetClass.asSubclass(Enum.class), FARMING);
+        Object farmingPreset = Enum.valueOf(
+            (Class<? extends Enum>) presetClass.asSubclass(Enum.class),
+            FARMING
+        );
 
         Field companionField = targetClass.getField("Companion");
         Object companion = companionField.get(null);
@@ -95,8 +103,8 @@ public final class SkysoftSessionReader {
     private static Map<String, Long> longMap(Object object, String fieldName) throws ReflectiveOperationException {
         Field field = findField(object.getClass(), fieldName);
         field.setAccessible(true);
-
         Object raw = field.get(object);
+
         if (!(raw instanceof Map<?, ?> source)) {
             throw new IllegalStateException("Skysoft field " + fieldName + " is not a Map");
         }
