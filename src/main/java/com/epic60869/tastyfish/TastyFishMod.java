@@ -30,21 +30,13 @@ public final class TastyFishMod implements ClientModInitializer {
     private void tick(Minecraft minecraft) {
         boolean connected = minecraft.player != null;
         if (!connected) {
-            if (wasConnected) {
-                sessionId = FarmingUploader.newSessionId();
-                lastActiveMillis = -1L;
-            }
             wasConnected = false;
             return;
         }
 
         if (!wasConnected) {
-            sessionId = FarmingUploader.newSessionId();
-            lastActiveMillis = -1L;
             lastUploadMillis = 0L;
             wasConnected = true;
-
-            // Check once per game launch for a newer released TastyFish version.
             TastyFishVersionChecker.check(minecraft);
         }
 
@@ -54,11 +46,14 @@ public final class TastyFishMod implements ClientModInitializer {
 
         SkysoftSessionReader.Snapshot snapshot = SkysoftSessionReader.read();
 
-        // Skysoft clears its session tracker on profile changes/disconnects. A drop in
-        // activeMillis is therefore treated as a new client-side session so the server
-        // never mistakes the reset value for negative progress in the old session.
+        if (!snapshot.valid()) {
+            System.err.println("[TastyFish] Skysoft farming snapshot is not ready; upload skipped.");
+            return;
+        }
+
         if (lastActiveMillis >= 0L && snapshot.activeMillis() < lastActiveMillis) {
             sessionId = FarmingUploader.newSessionId();
+            System.out.println("[TastyFish] Skysoft active time reset; started a new leaderboard session.");
         }
         lastActiveMillis = snapshot.activeMillis();
 
