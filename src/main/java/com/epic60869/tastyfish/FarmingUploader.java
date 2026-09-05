@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class FarmingUploader {
     private static final Gson GSON = new Gson();
-    private static final String MOD_VERSION = "1.0.5-26.1.2";
+    private static final String MOD_VERSION = "1.0.7-26.1.2";
     private static final long AUTH_COOLDOWN_MS = 30_000L;
     private static final long AUTH_RATE_LIMIT_BACKOFF_MS = 60_000L;
     private static final long MAX_AUTH_BACKOFF_MS = 10 * 60_000L;
@@ -24,51 +24,28 @@ public final class FarmingUploader {
     private volatile String tokenUsername;
     private volatile String tokenUuid;
     private volatile String tokenSessionId;
-    private volatile String baselinedSessionId;
     private volatile long authBlockedUntil;
     private volatile long authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
     private final AtomicBoolean authenticationInProgress = new AtomicBoolean(false);
     private final AtomicBoolean updateInProgress = new AtomicBoolean(false);
 
-    private volatile String trackedSessionId;
-    private volatile double lastSubmittedProfit = -1.0D;
-
     public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
                        SkysoftSessionReader.Snapshot snapshot) {
-        if (!config.enabled || config.endpoint.isBlank()) return;
-        if (!snapshot.valid()) return;
-        if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) {
-            System.err.println("[TastyFish] Farming upload skipped: missing username, UUID, or session ID.");
-            return;
-        }
-
-        if (!sessionId.equals(trackedSessionId)) {
-            trackedSessionId = sessionId;
-            lastSubmittedProfit = -1.0D;
-        }
-
-        // Skysoft's profit is cumulative. Do not send the same value again.
-        if (lastSubmittedProfit >= 0.0D && snapshot.profit() <= lastSubmittedProfit) return;
-        if (updateInProgress.get()) return;
+        if (!config.enabled || config.endpoint.isBlank() || !snapshot.valid()) return;
+        if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) return;
 
         if (token == null || !username.equalsIgnoreCase(tokenUsername)
                 || !uuid.equalsIgnoreCase(tokenUuid) || !sessionId.equals(tokenSessionId)) {
-            authenticate(config, username, uuid, sessionId, profile);
+            authenticate(config, username, uuid, sessionId);
             return;
         }
 
-        if (updateInProgress.compareAndSet(false, true)) {
-            double previous = lastSubmittedProfit;
-            lastSubmittedProfit = snapshot.profit();
-            sendUpdate(config, username, uuid, profile, sessionId, snapshot, false, previous);
-        }
+        sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
     }
 
-    private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId,
-                              String profile) {
+    private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId) {
         long now = System.currentTimeMillis();
-        if (now < authBlockedUntil) return;
-        if (!authenticationInProgress.compareAndSet(false, true)) return;
+        if (now < authBlockedUntil || !authenticationInProgress.compareAndSet(false, true)) return;
 
         try {
             JsonObject body = new JsonObject();
@@ -94,26 +71,18 @@ public final class FarmingUploader {
                             System.err.println("[TastyFish] Farming authentication failed: no token returned.");
                             return;
                         }
-
                         token = json.get("token").getAsString();
                         tokenUsername = username;
                         tokenUuid = uuid.toLowerCase();
                         tokenSessionId = sessionId;
                         authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-
                         System.out.println("[TastyFish] Farming authentication successful.");
-
-                        if (!sessionId.equals(baselinedSessionId)) {
-                            sendBaseline(config, username, uuid, profile, sessionId);
-                            baselinedSessionId = sessionId;
-                        }
                     } else if (response.statusCode() == 429) {
                         long retryMs = retryAfterMillis(response);
                         authBlockedUntil = System.currentTimeMillis() + retryMs;
                         authBackoffMs = Math.min(Math.max(authBackoffMs * 2L, AUTH_RATE_LIMIT_BACKOFF_MS), MAX_AUTH_BACKOFF_MS);
-                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for "
-                            + (retryMs / 1000L) + " seconds.");
+                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
                     } else {
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
                         System.err.println("[TastyFish] Farming authentication failed: HTTP " + response.statusCode() + ": " + response.body());
@@ -137,7 +106,8 @@ public final class FarmingUploader {
         }
     }
 
-    private void sendBaseline(TastyFishConfig config, String username, String uuid, String profile, String sessionId) {
+    private void sendCumulativeUpdate(TastyFishConfig config, String username, String uuid, String profile,
+                                      String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
         if (!updateInProgress.compareAndSet(false, true)) return;
 
         JsonObject root = new JsonObject();
@@ -145,35 +115,20 @@ public final class FarmingUploader {
         root.addProperty("uuid", uuid);
         root.addProperty("profile", profile == null ? "" : profile);
         root.addProperty("preset", "FARMING");
-        root.addProperty("profit", 0.0);
-        root.addProperty("activeMillis", 0L);
-        root.addProperty("actions", 0L);
-        root.addProperty("sessionId", sessionId);
-        root.add("items", GSON.toJsonTree(Map.of()));
-        root.add("pests", GSON.toJsonTree(Map.of()));
-
-        sendJson(config, root, username, uuid, profile, sessionId, false, true, -1.0D);
-    }
-
-    private void sendUpdate(TastyFishConfig config, String username, String uuid, String profile,
-                            String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry,
-                            double previousProfit) {
-        JsonObject root = new JsonObject();
-        root.addProperty("username", username);
-        root.addProperty("uuid", uuid);
-        root.addProperty("profile", profile == null ? "" : profile);
-        root.addProperty("preset", "FARMING");
+        // The backend owns delta calculation/deduplication. Always send Skysoft's
+        // cumulative totals rather than a client-side delta.
         root.addProperty("profit", snapshot.profit());
         root.addProperty("activeMillis", snapshot.activeMillis());
         root.addProperty("actions", snapshot.actions());
         root.addProperty("sessionId", sessionId);
         root.add("items", GSON.toJsonTree(snapshot.items()));
         root.add("pests", GSON.toJsonTree(snapshot.pests()));
-        sendJson(config, root, username, uuid, profile, sessionId, retry, false, previousProfit);
+
+        sendJson(config, root, username, uuid, profile, sessionId, retry);
     }
 
     private void sendJson(TastyFishConfig config, JsonObject root, String username, String uuid, String profile,
-                          String sessionId, boolean retry, boolean baseline, double previousProfit) {
+                          String sessionId, boolean retry) {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(config.endpoint))
             .timeout(Duration.ofSeconds(15))
@@ -186,30 +141,25 @@ public final class FarmingUploader {
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
             try {
                 if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    System.out.println("[TastyFish] Farming " + (baseline ? "baseline" : "update") + " uploaded: " + response.body());
+                    System.out.println("[TastyFish] Farming cumulative update uploaded: " + response.body());
                 } else if (response.statusCode() == 401 && !retry) {
-                    if (!baseline) lastSubmittedProfit = previousProfit;
                     token = null;
                     tokenUsername = null;
                     tokenUuid = null;
                     tokenSessionId = null;
                     System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
-                    if (!baseline) authenticate(config, username, uuid, sessionId, profile);
+                    authenticate(config, username, uuid, sessionId);
                 } else if (response.statusCode() == 429) {
-                    if (!baseline) lastSubmittedProfit = previousProfit;
                     long retryMs = retryAfterMillis(response);
                     authBlockedUntil = System.currentTimeMillis() + retryMs;
-                    System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for "
-                        + (retryMs / 1000L) + " seconds.");
+                    System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
                 } else {
-                    if (!baseline) lastSubmittedProfit = previousProfit;
                     System.err.println("[TastyFish] Farming upload failed: HTTP " + response.statusCode() + ": " + response.body());
                 }
             } finally {
                 updateInProgress.set(false);
             }
         }).exceptionally(error -> {
-            if (!baseline) lastSubmittedProfit = previousProfit;
             updateInProgress.set(false);
             System.err.println("[TastyFish] Farming upload failed: " + rootMessage(error));
             return null;
@@ -222,8 +172,7 @@ public final class FarmingUploader {
             try {
                 long seconds = Long.parseLong(retryAfter);
                 if (seconds >= 0) return Math.min(seconds * 1000L, MAX_AUTH_BACKOFF_MS);
-            } catch (NumberFormatException ignored) {
-            }
+            } catch (NumberFormatException ignored) { }
         }
         return authBackoffMs;
     }
