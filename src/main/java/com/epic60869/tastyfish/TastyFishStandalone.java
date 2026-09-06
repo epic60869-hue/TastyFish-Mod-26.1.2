@@ -25,9 +25,8 @@ public final class TastyFishStandalone {
     public List<PestRow> pestRows(){List<PestRow> o=new ArrayList<>();long r=pests.values().stream().mapToLong(Long::longValue).sum();for(var e:pests.entrySet())o.add(new PestRow(e.getKey(),e.getValue(),actions==0?0:e.getValue()*100.0/actions));long m=Math.max(0,actions-r);if(m>0)o.add(new PestRow("Not recorded",m,actions==0?0:m*100.0/actions));return o;}
     public Drop activeDrop(){if(activeDrop!=null&&System.currentTimeMillis()>activeDrop.until())activeDrop=null;return activeDrop;}
     private void handleMessage(Component message){String raw=message.getString().replaceAll("§[0-9a-fk-or]","").trim();String lower=raw.toLowerCase(Locale.ROOT);
-        // Farming sack messages are the reliable source because crops usually go straight into sacks.
-        Matcher sack=Pattern.compile("(?i)(?:\\[sacks?\\]|sacks?)\\s*[:>]?\\s*[+]?([\\d,]+)\\s*[x×]?\\s*(.+?)\\s*$").matcher(raw);
-        if(sack.find()){String name=sack.group(2).replaceAll("\\s*\\([^)]*\\)\\s*$","").trim();long amount=parseLong(sack.group(1));String id=ids.get(norm(name));if(id==null)id=skyblockIdGuess(name);if(amount>0&&id!=null){items.merge(id,amount,Long::sum);actions++;activity();}}
+        Matcher sack=Pattern.compile("(?i)(?:\\[sacks?\\]|sacks?)\\s*[:>]?\\s*(?:(?:[+]?([\\d,]+)\\s*[x×]?\\s*(.+?))|(.+?)\\s*[+](?:([\\d,]+)))\\s*$").matcher(raw);
+        if(sack.find()){String name=sack.group(2)!=null?sack.group(2):sack.group(3);String amountText=sack.group(1)!=null?sack.group(1):sack.group(4);if(name!=null&&amountText!=null){name=name.replaceAll("\\s*\\([^)]*\\)\\s*$","").trim();long amount=parseLong(amountText);String id=ids.get(norm(name));if(id==null)id=skyblockIdGuess(name);if(amount>0&&id!=null){items.merge(id,amount,Long::sum);actions++;activity();}}}
         if(lower.contains("pest")&&(lower.contains("killed")||lower.contains("vacuumed")||lower.contains("slain"))){String name=pestName(raw);pests.merge(name,1L,Long::sum);actions++;activity();}
         Parsed parsed=parseDrop(raw);if(parsed!=null){long price=parsed.name().equalsIgnoreCase("Seasoning")?-1:Math.round(ItemPriceResolver.valueByName(parsed.name()));activeDrop=new Drop(parsed.amount(),parsed.name(),rarity(raw),price,System.currentTimeMillis()+RNG_SHOW);}
     }
