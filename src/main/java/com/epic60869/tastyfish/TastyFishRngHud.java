@@ -4,25 +4,125 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.resources.Identifier;
+
 import java.util.Locale;
 
 public final class TastyFishRngHud {
-    private static final Identifier ID=Identifier.fromNamespaceAndPath("tastyfish-mod","farming_rng");
-    private static final int BASE_WIDTH=230;
-    private static final int BASE_HEIGHT=42;
+    private static final Identifier ID = Identifier.fromNamespaceAndPath("tastyfish-mod", "farming_rng");
+    private static final int BASE_WIDTH = 250;
+    private static final int BASE_HEIGHT = 48;
     private static TastyFishConfig config;
-    private TastyFishRngHud(){}
-    public static void register(TastyFishConfig cfg){config=cfg;HudElementRegistry.addLast(ID,TastyFishRngHud::extract);}
-    private static void extract(GuiGraphicsExtractor g,net.minecraft.client.DeltaTracker d){if(config==null||!config.farmingRngEnabled||Minecraft.getInstance().player==null)return;FarmingRngTracker.Drop drop=FarmingRngTracker.get().active();if(drop!=null)render(g,drop,config.farmingRngX,config.farmingRngY);}
-    public static int width(){return Math.max(1,Math.round(BASE_WIDTH*scale()));}
-    public static int height(){return Math.max(1,Math.round(BASE_HEIGHT*scale()));}
-    public static float scale(){return config==null?1.0f:config.farmingRngScale;}
-    public static void setPosition(int x,int y){if(config==null)return;config.farmingRngX=Math.max(0,x);config.farmingRngY=Math.max(0,y);save();}
-    public static void setScale(float value){if(config==null)return;config.farmingRngScale=Math.max(0.5f,Math.min(3.0f,Math.round(value*10.0f)/10.0f));save();}
-    public static void changeScale(float amount){setScale(scale()+amount);}
-    public static String scaleText(){return String.format(Locale.ROOT,"%.1fx",scale());}
-    public static void renderPreview(GuiGraphicsExtractor g,int x,int y){render(g,new FarmingRngTracker.Drop(1,"Overgrown Grass","RARE DROP",125000,Long.MAX_VALUE),x,y);}
-    private static void render(GuiGraphicsExtractor g,FarmingRngTracker.Drop d,int x,int y){float s=scale();g.pose().pushPose();g.pose().translate(x,y,0);g.pose().scale(s,s,1.0f);if(config!=null&&config.farmingRngBackground){g.fill(-6,-5,BASE_WIDTH,BASE_HEIGHT,0xB5101014);g.fill(0,0,3,BASE_HEIGHT,0xFFFFD84D);}String item=(d.amount()>1?d.amount()+"x ":"")+d.name();String p=d.unitPrice()<0?"—":format(d.unitPrice()*d.amount())+" coins";g.text(Minecraft.getInstance().font,d.rarity(),9,2,0xFFFFFF55,true);g.text(Minecraft.getInstance().font,item,9,15,0xFFFFFFFF,true);g.text(Minecraft.getInstance().font,p,9,29,0xFFAAAAAA,false);g.pose().popPose();}
-    private static String format(long v){if(v>=1000000000L)return String.format(Locale.ROOT,"%.2fB",v/1e9);if(v>=1000000L)return String.format(Locale.ROOT,"%.2fM",v/1e6);if(v>=1000L)return String.format(Locale.ROOT,"%.1fk",v/1e3);return Long.toString(v);}
-    private static void save(){Minecraft mc=Minecraft.getInstance();config.save(mc.gameDirectory.toPath().resolve("config").resolve("tastyfish-mod.json"));}
+
+    private TastyFishRngHud() {}
+
+    public static void register(TastyFishConfig cfg) {
+        config = cfg;
+        HudElementRegistry.addLast(ID, TastyFishRngHud::extract);
+    }
+
+    private static void extract(GuiGraphicsExtractor graphics, net.minecraft.client.DeltaTracker deltaTracker) {
+        if (config == null || !config.farmingRngEnabled || Minecraft.getInstance().player == null) return;
+        FarmingRngTracker.Drop drop = FarmingRngTracker.get().active();
+        if (drop == null) return;
+        render(graphics, drop, config.farmingRngX, config.farmingRngY);
+    }
+
+    public static int width() {
+        return Math.max(1, Math.round(BASE_WIDTH * scale()));
+    }
+
+    public static int height() {
+        return Math.max(1, Math.round(BASE_HEIGHT * scale()));
+    }
+
+    public static float scale() {
+        return config == null ? 1.0f : config.farmingRngScale;
+    }
+
+    public static void setPosition(int x, int y) {
+        if (config == null) return;
+        config.farmingRngX = Math.max(0, x);
+        config.farmingRngY = Math.max(0, y);
+        save();
+    }
+
+    public static void setScale(float value) {
+        if (config == null) return;
+        config.farmingRngScale = Math.max(0.5f, Math.min(3.0f,
+            Math.round(value * 10.0f) / 10.0f));
+        save();
+    }
+
+    public static void changeScale(float amount) {
+        setScale(scale() + amount);
+    }
+
+    public static String scaleText() {
+        return String.format(Locale.ROOT, "%.1fx", scale());
+    }
+
+    public static void renderPreview(GuiGraphicsExtractor graphics, int x, int y) {
+        render(graphics,
+            new FarmingRngTracker.Drop(1, "Overgrown Grass", "RARE DROP", 125000, Long.MAX_VALUE),
+            x, y);
+    }
+
+    private static void render(GuiGraphicsExtractor graphics,
+                               FarmingRngTracker.Drop drop,
+                               int x,
+                               int y) {
+        float s = scale();
+        graphics.pose().pushPose();
+        graphics.pose().translate(x, y, 0);
+        graphics.pose().scale(s, s, 1.0f);
+
+        // Compact Nopo/Overflow-style info HUD: subtle dark panel, small yellow
+        // category line, bold white result, and a muted value line.
+        if (config != null && config.farmingRngBackground) {
+            graphics.fill(-5, -4, BASE_WIDTH + 4, BASE_HEIGHT + 2, 0xA8000000);
+            graphics.fill(-5, -4, BASE_WIDTH + 4, -3, 0x55FFFFFF);
+            graphics.fill(-5, BASE_HEIGHT + 1, BASE_WIDTH + 4, BASE_HEIGHT + 2, 0x33000000);
+        }
+
+        String rarity = drop.rarity();
+        String item = (drop.amount() > 1 ? drop.amount() + "x " : "") + drop.name();
+        String price = drop.unitPrice() < 0
+            ? "—"
+            : formatCoins(drop.unitPrice() * drop.amount()) + " coins";
+
+        drawShadowed(graphics, rarity, 6, 0, 0xFFFFD84D, true);
+        drawShadowed(graphics, item, 6, 13, 0xFFFFFFFF, true);
+        drawShadowed(graphics, price, 6, 28, 0xFFB8B8B8, false);
+
+        graphics.pose().popPose();
+    }
+
+    private static void drawShadowed(GuiGraphicsExtractor graphics,
+                                     String text,
+                                     int x,
+                                     int y,
+                                     int color,
+                                     boolean bold) {
+        var font = Minecraft.getInstance().font;
+        graphics.text(font, text, x + 1, y + 1, 0xAA000000, false);
+        graphics.text(font, text, x, y, color, bold);
+    }
+
+    private static String formatCoins(long value) {
+        if (value >= 1_000_000_000L) {
+            return String.format(Locale.ROOT, "%.2fB", value / 1_000_000_000.0);
+        }
+        if (value >= 1_000_000L) {
+            return String.format(Locale.ROOT, "%.2fM", value / 1_000_000.0);
+        }
+        if (value >= 1_000L) {
+            return String.format(Locale.ROOT, "%.1fk", value / 1_000.0);
+        }
+        return Long.toString(value);
+    }
+
+    private static void save() {
+        Minecraft mc = Minecraft.getInstance();
+        config.save(mc.gameDirectory.toPath().resolve("config").resolve("tastyfish-mod.json"));
+    }
 }
