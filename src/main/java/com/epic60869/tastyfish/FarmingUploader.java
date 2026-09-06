@@ -79,10 +79,12 @@ public final class FarmingUploader {
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
                         System.out.println("[TastyFish] Farming authentication successful.");
 
-                        // The first snapshot used to authenticate was being discarded.
-                        // Send that exact snapshot now so the leaderboard starts counting
-                        // from the moment the game launches instead of one upload later.
-                        sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
+                        // Do not discard the first valid Skysoft snapshot. Upload it
+                        // immediately after authentication so the leaderboard starts
+                        // counting from the first value available after game launch.
+                        if (snapshot != null) {
+                            sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
+                        }
                     } else if (response.statusCode() == 429) {
                         long retryMs = retryAfterMillis(response);
                         authBlockedUntil = System.currentTimeMillis() + retryMs;
