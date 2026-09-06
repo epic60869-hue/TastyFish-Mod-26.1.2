@@ -1,0 +1,51 @@
+package com.epic60869.tastyfish;
+
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import java.util.*;
+
+public final class TastyFishHud {
+    private static final Identifier PROFIT = Identifier.fromNamespaceAndPath("tastyfish-mod", "profit");
+    private static final Identifier RNG = Identifier.fromNamespaceAndPath("tastyfish-mod", "rng");
+    private static TastyFishConfig config;
+    private static int px, py, rx, ry;
+    private TastyFishHud() {}
+
+    public static void register(TastyFishConfig cfg) {
+        config = cfg; px = cfg.profitHudX; py = cfg.profitHudY; rx = cfg.rngHudX; ry = cfg.rngHudY;
+        HudElementRegistry.addLast(PROFIT, TastyFishHud::profit);
+        HudElementRegistry.addLast(RNG, TastyFishHud::rng);
+    }
+    public static int profitX(){return px;} public static int profitY(){return py;} public static int profitW(){return 200;} public static int profitH(){return 65;}
+    public static int rngX(){return rx;} public static int rngY(){return ry;} public static int rngW(){return 240;} public static int rngH(){return 52;}
+    private static void save(){ if(config!=null){config.profitHudX=px;config.profitHudY=py;config.rngHudX=rx;config.rngHudY=ry;config.save();} }
+    private static void profit(GuiGraphicsExtractor g, net.minecraft.client.DeltaTracker d){
+        Minecraft mc=Minecraft.getInstance(); if(mc.player==null||mc.gui.hud.isHidden())return; TastyFishStandalone t=TastyFishStandalone.get();
+        g.fill(px-3,py-3,px+profitW(),py+profitH(),0x88000000); bold(g,"TastyFish Farming",px,py,0xFFFFFF55); bold(g,"Total Profit: "+coins(t.profit()),px,py+13,0xFFFFFFFF); bold(g,"Profit/h: "+coins(t.profitPerHour()),px,py+25,0xFFAAAAAA); bold(g,"Items Tracked: "+t.items().values().stream().mapToLong(Long::longValue).sum(),px,py+37,0xFFAAAAAA); bold(g,"Pests Killed: "+t.pests().values().stream().mapToLong(Long::longValue).sum(),px,py+49,0xFFFFFFFF);
+        if(mouseOver(mc,g,px,py+47,profitW(),18)){ List<TastyFishStandalone.PestRow> rows=t.pestRows(); int y=py+64; g.fill(px-4,y,px+180,y+10+rows.size()*12,0xEE111111); bold(g,"Pests Vacuumed",px,y+2,0xFFFFFF55); y+=14; for(var row:rows){String p=String.format(Locale.ROOT,"%.1f",row.percentage()).replace(".0",""); bold(g,row.name()+" "+row.count()+" ("+p+"%)",px,y,0xFFDDDDDD); y+=12;}}
+    }
+    private static void rng(GuiGraphicsExtractor g, net.minecraft.client.DeltaTracker d){
+        Minecraft mc=Minecraft.getInstance(); if(mc.player==null||mc.gui.hud.isHidden())return; TastyFishStandalone.Drop drop=TastyFishStandalone.get().activeDrop(); if(drop==null)return;
+        g.fill(rx-3,ry-3,rx+rngW(),ry+rngH(),0x88000000); bold(g,"Farming RNG",rx,ry,0xFFFFFF55); int c=switch(drop.rarity()){case "RNGESUS"->0xFFAA00AA;case "CRAZY RARE"->0xFFFF55FF;case "RARE CROP"->0xFF5555FF;default->0xFFFFFF55;}; bold(g,drop.amount()+"x "+drop.name(),rx,ry+13,c); String v=drop.name().equalsIgnoreCase("Seasoning")?"—":drop.unitPrice()>0?coins(drop.unitPrice()*drop.amount()):"0 coins"; bold(g,v,rx,ry+26,0xFFFFAA00); bold(g,"Price: NPC / Bazaar / LBIN",rx,ry+39,0xFFAAAAAA);
+    }
+    public static void open(TastyFishConfig cfg){ Minecraft.getInstance().gui.setScreen(new Screen(Component.literal("TastyFish")){ private boolean editor=false; private String drag;
+        protected void init(){ if(editor){addRenderableWidget(Button.builder(Component.literal("Done"),b->{Minecraft.getInstance().gui.setScreen(new TastyFishHudScreen(cfg));}).bounds(width/2-50,height-32,100,20).build());} else {addRenderableWidget(Button.builder(Component.literal("GUI Editor"),b->{editor=true;clearWidgets();init();}).bounds(width/2-60,height/2-10,120,20).build());addRenderableWidget(Button.builder(Component.literal("Reset Farming Data"),b->TastyFishStandalone.get().reset()).bounds(width/2-60,height/2+16,120,20).build());addRenderableWidget(Button.builder(Component.literal("Close"),b->onClose()).bounds(width/2-60,height/2+42,120,20).build());}}
+        public void extractRenderState(GuiGraphicsExtractor g,int mx,int my,float dt){super.extractRenderState(g,mx,my,dt);if(!editor){g.centeredText(font,"TastyFish",width/2,height/2-60,0xFFFFFF55);return;}g.centeredText(font,"GUI Editor - hover an element, then drag it",width/2,14,0xFFFFFF55);preview(g,px,py,profitW(),profitH(),"TastyFish Farming",mx>=px&&mx<=px+profitW()&&my>=py&&my<=py+profitH());preview(g,rx,ry,rngW(),rngH(),"Farming RNG",mx>=rx&&mx<=rx+rngW()&&my>=ry&&my<=ry+rngH());}
+        public boolean mouseClicked(MouseButtonEvent e,boolean dbl){if(editor&&e.button()==0){if(over(e.x(),e.y(),px,py,profitW(),profitH())){drag="p";return true;}if(over(e.x(),e.y(),rx,ry,rngW(),rngH())){drag="r";return true;}}return super.mouseClicked(e,dbl);}
+        public boolean mouseDragged(MouseButtonEvent e,double dx,double dy){if(editor&&drag!=null&&e.button()==0){if(drag.equals("p")){px=(int)e.x()-profitW()/2;py=(int)e.y()-30;}else{rx=(int)e.x()-rngW()/2;ry=(int)e.y()-26;}save();return true;}return super.mouseDragged(e,dx,dy);}
+        public boolean mouseReleased(MouseButtonEvent e){if(editor&&e.button()==0&&drag!=null){drag=null;return true;}return super.mouseReleased(e);}
+        private boolean over(double x,double y,int a,int b,int w,int h){return x>=a&&x<=a+w&&y>=b&&y<=b+h;}
+    }); }
+    private static final class TastyFishHudScreen extends Screen { TastyFishHudScreen(TastyFishConfig cfg){super(Component.literal("TastyFish"));} }
+    private static void preview(GuiGraphicsExtractor g,int x,int y,int w,int h,String title,boolean sel){int o=sel?0xFFFFFF55:0xFF777777;g.fill(x-4,y-4,x+w+1,y+h+1,0x55000000);g.fill(x-4,y-4,x+w+1,y-3,o);bold(g,title,x,y,0xFFFFFF55);bold(g,"Drag this HUD element",x,y+13,0xFFDDDDDD);}
+    private static boolean mouseOver(Minecraft mc,GuiGraphicsExtractor g,int x,int y,int w,int h){try{double sx=((Number)mc.mouseHandler.getClass().getMethod("xpos").invoke(mc.mouseHandler)).doubleValue();double sy=((Number)mc.mouseHandler.getClass().getMethod("ypos").invoke(mc.mouseHandler)).doubleValue();return sx* g.guiWidth()/mc.getWindow().getScreenWidth()>=x&&sx*g.guiWidth()/mc.getWindow().getScreenWidth()<=x+w&&sy*g.guiHeight()/mc.getWindow().getScreenHeight()>=y&&sy*g.guiHeight()/mc.getWindow().getScreenHeight()<=y+h;}catch(Throwable e){return false;}}
+    private static void bold(GuiGraphicsExtractor g,String s,int x,int y,int c){g.text(Minecraft.getInstance().font,s,x,y,c,true);}
+    private static String coins(double v){if(v>=1e9)return String.format(Locale.ROOT,"%.2fB",v/1e9);if(v>=1e6)return String.format(Locale.ROOT,"%.2fM",v/1e6);if(v>=1e3)return String.format(Locale.ROOT,"%.1fk",v/1e3);return String.format(Locale.ROOT,"%.0f",v);}
+    private static String coins(long v){return coins((double)v)+" coins";}
+}
