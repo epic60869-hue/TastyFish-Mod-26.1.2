@@ -39,7 +39,11 @@ public final class ItemPriceResolver {
         long now=System.currentTimeMillis(); if(now-last<CACHE||!REFRESHING.compareAndSet(false,true))return;
         CompletableFuture<HttpResponse<String>> a=get(ITEMS_URL),b=get(BAZAAR_URL),c=get(LBIN_URL);
         CompletableFuture.allOf(a,b,c).thenRun(()->{try{
-            String itemsBody=a.join().body(); Map<String,Double> n=parseNpc(itemsBody),bz=parseBazaar(b.join()),lb=parseBin(c.join()); Map<String,String> names=parseNames(itemsBody);
+            String itemsBody=a.join().body();
+            String bazaarBody=b.join().body();
+            String binBody=c.join().body();
+            Map<String,Double> n=parseNpc(itemsBody),bz=parseBazaar(bazaarBody),lb=parseBin(binBody);
+            Map<String,String> names=parseNames(itemsBody);
             synchronized(NPC){NPC.clear();NPC.putAll(n);} synchronized(BAZAAR){BAZAAR.clear();BAZAAR.putAll(bz);} synchronized(LBIN){LBIN.clear();LBIN.putAll(lb);} synchronized(NAME_TO_ID){NAME_TO_ID.clear();NAME_TO_ID.putAll(names);} last=System.currentTimeMillis();
         }catch(Throwable e){System.err.println("[TastyFish] Price refresh failed: "+e);}}).whenComplete((v,e)->REFRESHING.set(false));
     }
