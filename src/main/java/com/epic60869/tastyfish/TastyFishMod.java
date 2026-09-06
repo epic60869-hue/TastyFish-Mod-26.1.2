@@ -18,8 +18,21 @@ public final class TastyFishMod implements ClientModInitializer {
     private String sessionId=FarmingUploader.newSessionId();
     private long lastUploadMillis=0L,lastActiveMillis=-1L;
     private boolean wasConnected=false;
-    @Override public void onInitializeClient(){Minecraft mc=Minecraft.getInstance();Path p=mc.gameDirectory.toPath().resolve("config").resolve("tastyfish-mod.json");config=TastyFishConfig.load(p);FarmingRngTracker.get().register();TastyFishRngHud.register(config);ClientTickEvents.END_CLIENT_TICK.register(this::tick);ClientCommandRegistrationCallback.EVENT.register((dispatcher,registry)->{dispatcher.register(ClientCommands.literal("tf").executes(c->openMenu()));dispatcher.register(ClientCommands.literal("tastyfish").executes(c->openMenu()));});System.out.println("[TastyFish] SkySoft integration and farming RNG overlay loaded.");}
+    @Override public void onInitializeClient(){
+        Minecraft mc=Minecraft.getInstance();
+        Path p=mc.gameDirectory.toPath().resolve("config").resolve("tastyfish-mod.json");
+        config=TastyFishConfig.load(p);
+        FarmingRngTracker.get().register();
+        TastyFishRngHud.register(config);
+        ClientTickEvents.END_CLIENT_TICK.register(this::tick);
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher,registry)->{
+            dispatcher.register(ClientCommands.literal("tf").executes(c->openMenu()).then(ClientCommands.literal("gui").executes(c->openGuiEditor())));
+            dispatcher.register(ClientCommands.literal("tastyfish").executes(c->openMenu()).then(ClientCommands.literal("gui").executes(c->openGuiEditor())));
+        });
+        System.out.println("[TastyFish] SkySoft integration and farming RNG overlay loaded.");
+    }
     private int openMenu(){Minecraft.getInstance().execute(()->Minecraft.getInstance().setScreen(new TastyFishScreen(config)));return 1;}
+    private int openGuiEditor(){Minecraft.getInstance().execute(()->Minecraft.getInstance().setScreen(new TastyFishGuiEditor(config)));return 1;}
     private void tick(Minecraft mc){if(mc.player==null){wasConnected=false;return;}if(!wasConnected){lastUploadMillis=0L;wasConnected=true;TastyFishVersionChecker.check(mc);}long now=System.currentTimeMillis();if(now-lastUploadMillis<config.uploadIntervalSeconds*1000L)return;lastUploadMillis=now;SkysoftSessionReader.Snapshot s=SkysoftSessionReader.read();if(!s.valid())return;if(lastActiveMillis>=0&&s.activeMillis()<lastActiveMillis)sessionId=FarmingUploader.newSessionId();lastActiveMillis=s.activeMillis();UUID uuid=mc.getUser().getProfileId();uploader.upload(config,mc.getUser().getName(),uuid==null?"":uuid.toString(),currentSkysoftProfile(),sessionId,s);}
     private String currentSkysoftProfile(){try{Class<?> api=Class.forName("com.skysoft.data.hypixel.SkyBlockProfileApi");Field f=api.getDeclaredField("currentProfileKey");f.setAccessible(true);Object v=f.get(null);return v==null?"":v.toString();}catch(Throwable ignored){return "";}}
 }
