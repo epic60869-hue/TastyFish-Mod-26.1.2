@@ -1,6 +1,6 @@
 package com.epic60869.tastyfish;
 
-import net.fabricmc.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import java.util.Locale;
