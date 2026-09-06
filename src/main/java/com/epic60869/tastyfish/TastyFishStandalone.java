@@ -56,8 +56,8 @@ public final class TastyFishStandalone {
     private void handleMessage(Component message){
         String raw=message.getString().replaceAll("§[0-9a-fk-or]","").replaceAll("\\s+"," ").trim();
         String lower=raw.toLowerCase(Locale.ROOT);
-        Matcher sack=SACK_A.matcher(raw); if(!sack.find())sack=SACK_B.matcher(raw);
-        if(sack.find(0)){
+        Matcher sack=SACK_A.matcher(raw); if(!sack.matches())sack=SACK_B.matcher(raw);
+        if(sack.matches()){
             String amountText=sack.group(1)!=null?sack.group(1):sack.group(2);
             String name=sack.group(1)!=null?sack.group(2):sack.group(1);
             if(name!=null&&amountText!=null){name=name.replaceAll("\\s*\\([^)]*\\)\\s*$","").trim();long amount=parseLong(amountText);String id=ItemPriceResolver.idByName(name);if(id==null)id=ids.get(norm(name));if(id==null)id=skyblockIdGuess(name);if(amount>0&&id!=null){items.merge(id,amount,Long::sum);actions++;activity();}}
@@ -71,7 +71,7 @@ public final class TastyFishStandalone {
     private String pestName(String s){Matcher m=Pattern.compile("(?i)(?:killed|vacuumed|slain)\\s+(?:a\\s+)?(.+?)(?:!|\\.|$)").matcher(s);return m.find()?m.group(1).trim():"Pest";}
     private String rarity(String s){String l=s.toLowerCase(Locale.ROOT);if(l.contains("rare crop"))return"RARE CROP";if(l.contains("crazy rare"))return"CRAZY RARE";if(l.contains("rngesus"))return"RNGESUS";return"RARE DROP";}
     private void activity(){lastActivity=System.currentTimeMillis();}
-    private Map<String,Long> readInventory(Minecraft mc){Map<String,Long> out=new HashMap<>();try{for(ItemStack stack:mc.player.getInventory().items){if(stack==null||stack.isEmpty())continue;String name=stack.getHoverName().getString();out.merge(name,(long)stack.getCount(),Long::sum);}}catch(Throwable e){System.err.println("[TastyFish] Inventory scan failed: "+e);}return out;}
+    private Map<String,Long> readInventory(Minecraft mc){Map<String,Long> out=new HashMap<>();try{var inv=mc.player.getInventory();for(int i=0;i<inv.getContainerSize();i++){ItemStack stack=inv.getItem(i);if(stack==null||stack.isEmpty())continue;String name=stack.getHoverName().getString();out.merge(name,(long)stack.getCount(),Long::sum);}}catch(Throwable e){System.err.println("[TastyFish] Inventory scan failed: "+e);}return out;}
     private static String norm(String s){return s==null?"":s.replaceAll("§[0-9a-fk-or]","").replaceAll("\\s+"," ").trim().toLowerCase(Locale.ROOT);}
     public record Snapshot(Map<String,Long> items,Map<String,Long> pests,long activeMillis,long actions,double coins,double profit,boolean valid){} public Snapshot snapshot(){return new Snapshot(items(),pests(),activeMillis(),actions(),coins(),profit(),true);} public record PestRow(String name,long count,double percentage){} public record Drop(int amount,String name,String rarity,long unitPrice,long until){} private record Parsed(int amount,String name){}
 }
