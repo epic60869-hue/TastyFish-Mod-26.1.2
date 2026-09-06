@@ -2,201 +2,22 @@ package com.epic60869.tastyfish;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.net.http.*;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class FarmingUploader {
-    private static final Gson GSON = new Gson();
-    private static final String MOD_VERSION = "1.0.7-26.1.2";
-    private static final long AUTH_COOLDOWN_MS = 30_000L;
-    private static final long AUTH_RATE_LIMIT_BACKOFF_MS = 60_000L;
-    private static final long MAX_AUTH_BACKOFF_MS = 10 * 60_000L;
-
-    private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-    private volatile String token;
-    private volatile String tokenUsername;
-    private volatile String tokenUuid;
-    private volatile String tokenSessionId;
-    private volatile long authBlockedUntil;
-    private volatile long authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
-    private final AtomicBoolean authenticationInProgress = new AtomicBoolean(false);
-    private final AtomicBoolean updateInProgress = new AtomicBoolean(false);
-
-    public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
-                       SkysoftSessionReader.Snapshot snapshot) {
-        if (!config.enabled || config.endpoint.isBlank() || !snapshot.valid()) return;
-        if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) return;
-
-        if (token == null || !username.equalsIgnoreCase(tokenUsername)
-                || !uuid.equalsIgnoreCase(tokenUuid) || !sessionId.equals(tokenSessionId)) {
-            authenticate(config, username, uuid, profile, sessionId, snapshot);
-            return;
-        }
-
-        sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
-    }
-
-    private void authenticate(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
-                              SkysoftSessionReader.Snapshot snapshot) {
-        long now = System.currentTimeMillis();
-        if (now < authBlockedUntil || !authenticationInProgress.compareAndSet(false, true)) return;
-
-        try {
-            JsonObject body = new JsonObject();
-            body.addProperty("username", username);
-            body.addProperty("uuid", uuid);
-            body.addProperty("sessionId", sessionId);
-            body.addProperty("modVersion", MOD_VERSION);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(authEndpoint(config.endpoint)))
-                .timeout(Duration.ofSeconds(15))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
-                .build();
-
-            client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
-                try {
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
-                        if (json == null || !json.has("token")) {
-                            authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                            System.err.println("[TastyFish] Farming authentication failed: no token returned.");
-                            return;
-                        }
-                        token = json.get("token").getAsString();
-                        tokenUsername = username;
-                        tokenUuid = uuid.toLowerCase();
-                        tokenSessionId = sessionId;
-                        authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
-                        authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                        System.out.println("[TastyFish] Farming authentication successful.");
-
-                        // Do not discard the first valid Skysoft snapshot. Upload it
-                        // immediately after authentication so the leaderboard starts
-                        // counting from the first value available after game launch.
-                        if (snapshot != null) {
-                            sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
-                        }
-                    } else if (response.statusCode() == 429) {
-                        long retryMs = retryAfterMillis(response);
-                        authBlockedUntil = System.currentTimeMillis() + retryMs;
-                        authBackoffMs = Math.min(Math.max(authBackoffMs * 2L, AUTH_RATE_LIMIT_BACKOFF_MS), MAX_AUTH_BACKOFF_MS);
-                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
-                    } else {
-                        authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                        System.err.println("[TastyFish] Farming authentication failed: HTTP " + response.statusCode() + ": " + response.body());
-                    }
-                } catch (Exception e) {
-                    authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                    System.err.println("[TastyFish] Farming authentication response was invalid: " + e.getMessage());
-                } finally {
-                    authenticationInProgress.set(false);
-                }
-            }).exceptionally(error -> {
-                authenticationInProgress.set(false);
-                authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                System.err.println("[TastyFish] Farming authentication failed: " + rootMessage(error));
-                return null;
-            });
-        } catch (Exception e) {
-            authenticationInProgress.set(false);
-            authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-            System.err.println("[TastyFish] Farming authentication failed: " + e.getMessage());
-        }
-    }
-
-    private void sendCumulativeUpdate(TastyFishConfig config, String username, String uuid, String profile,
-                                      String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
-        if (!updateInProgress.compareAndSet(false, true)) return;
-
-        JsonObject root = new JsonObject();
-        root.addProperty("username", username);
-        root.addProperty("uuid", uuid);
-        root.addProperty("profile", profile == null ? "" : profile);
-        root.addProperty("preset", "FARMING");
-        // The backend owns delta calculation/deduplication. Always send Skysoft's
-        // cumulative totals rather than a client-side delta.
-        root.addProperty("profit", snapshot.profit());
-        root.addProperty("activeMillis", snapshot.activeMillis());
-        root.addProperty("actions", snapshot.actions());
-        root.addProperty("sessionId", sessionId);
-        root.add("items", GSON.toJsonTree(snapshot.items()));
-        root.add("pests", GSON.toJsonTree(snapshot.pests()));
-
-        sendJson(config, root, username, uuid, profile, sessionId, snapshot, retry);
-    }
-
-    private void sendJson(TastyFishConfig config, JsonObject root, String username, String uuid, String profile,
-                          String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
-        HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create(config.endpoint))
-            .timeout(Duration.ofSeconds(15))
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .header("Authorization", "Bearer " + token)
-            .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(root)))
-            .build();
-
-        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
-            try {
-                if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    System.out.println("[TastyFish] Farming cumulative update uploaded: " + response.body());
-                } else if (response.statusCode() == 401 && !retry) {
-                    token = null;
-                    tokenUsername = null;
-                    tokenUuid = null;
-                    tokenSessionId = null;
-                    System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
-                    authenticate(config, username, uuid, profile, sessionId, snapshot);
-                } else if (response.statusCode() == 429) {
-                    long retryMs = retryAfterMillis(response);
-                    authBlockedUntil = System.currentTimeMillis() + retryMs;
-                    System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
-                } else {
-                    System.err.println("[TastyFish] Farming upload failed: HTTP " + response.statusCode() + ": " + response.body());
-                }
-            } finally {
-                updateInProgress.set(false);
-            }
-        }).exceptionally(error -> {
-            updateInProgress.set(false);
-            System.err.println("[TastyFish] Farming upload failed: " + rootMessage(error));
-            return null;
-        });
-    }
-
-    private long retryAfterMillis(HttpResponse<?> response) {
-        String retryAfter = response.headers().firstValue("Retry-After").orElse("").trim();
-        if (!retryAfter.isEmpty()) {
-            try {
-                long seconds = Long.parseLong(retryAfter);
-                if (seconds >= 0) return Math.min(seconds * 1000L, MAX_AUTH_BACKOFF_MS);
-            } catch (NumberFormatException ignored) { }
-        }
-        return authBackoffMs;
-    }
-
-    private static String authEndpoint(String updateEndpoint) {
-        if (updateEndpoint.endsWith("/update")) return updateEndpoint.substring(0, updateEndpoint.length() - 7) + "/auth";
-        if (updateEndpoint.endsWith("/")) return updateEndpoint + "auth";
-        return updateEndpoint + "/auth";
-    }
-
-    private static String rootMessage(Throwable error) {
-        Throwable current = error;
-        while (current.getCause() != null) current = current.getCause();
-        return current.getMessage() == null ? current.toString() : current.getMessage();
-    }
-
-    public static String newSessionId() {
-        return UUID.randomUUID().toString();
-    }
+    private static final Gson GSON=new Gson(); private static final String MOD_VERSION="1.1.0-26.1.2";
+    private static final long AUTH_COOLDOWN_MS=30_000L, BACKOFF_MS=60_000L, MAX_BACKOFF_MS=600_000L;
+    private final HttpClient client=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    private volatile String token,tokenUsername,tokenUuid,tokenSessionId; private volatile long authBlockedUntil; private volatile long authBackoffMs=BACKOFF_MS;
+    private final AtomicBoolean authing=new AtomicBoolean(false), uploading=new AtomicBoolean(false);
+    public void upload(TastyFishConfig c,String username,String uuid,String profile,String sessionId,TastyFishStandalone.Snapshot s){if(!c.enabled||c.endpoint.isBlank()||!s.valid())return;if(username==null||username.isBlank()||uuid==null||uuid.isBlank())return;if(token==null||!username.equalsIgnoreCase(tokenUsername)||!uuid.equalsIgnoreCase(tokenUuid)||!sessionId.equals(tokenSessionId)){authenticate(c,username,uuid,profile,sessionId,s);return;}send(c,username,uuid,profile,sessionId,s,false);}
+    private void authenticate(TastyFishConfig c,String u,String id,String profile,String sid,TastyFishStandalone.Snapshot s){long now=System.currentTimeMillis();if(now<authBlockedUntil||!authing.compareAndSet(false,true))return;try{JsonObject b=new JsonObject();b.addProperty("username",u);b.addProperty("uuid",id);b.addProperty("sessionId",sid);b.addProperty("modVersion",MOD_VERSION);HttpRequest r=HttpRequest.newBuilder().uri(URI.create(authEndpoint(c.endpoint))).timeout(Duration.ofSeconds(15)).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(b))).build();client.sendAsync(r,HttpResponse.BodyHandlers.ofString()).thenAccept(res->{try{if(res.statusCode()>=200&&res.statusCode()<300){JsonObject j=GSON.fromJson(res.body(),JsonObject.class);if(j==null||!j.has("token")){authBlockedUntil=System.currentTimeMillis()+AUTH_COOLDOWN_MS;return;}token=j.get("token").getAsString();tokenUsername=u;tokenUuid=id.toLowerCase();tokenSessionId=sid;authBackoffMs=BACKOFF_MS;authBlockedUntil=System.currentTimeMillis()+AUTH_COOLDOWN_MS;send(c,u,id,profile,sid,s,false);}else if(res.statusCode()==429){long wait=retry(res);authBlockedUntil=System.currentTimeMillis()+wait;authBackoffMs=Math.min(Math.max(authBackoffMs*2,BACKOFF_MS),MAX_BACKOFF_MS);}else authBlockedUntil=System.currentTimeMillis()+AUTH_COOLDOWN_MS;}catch(Exception e){authBlockedUntil=System.currentTimeMillis()+AUTH_COOLDOWN_MS;}finally{authing.set(false);}}).exceptionally(e->{authing.set(false);authBlockedUntil=System.currentTimeMillis()+AUTH_COOLDOWN_MS;return null;});}catch(Exception e){authing.set(false);authBlockedUntil=System.currentTimeMillis()+AUTH_COOLDOWN_MS;}}
+    private void send(TastyFishConfig c,String u,String id,String profile,String sid,TastyFishStandalone.Snapshot s,boolean retry){if(!uploading.compareAndSet(false,true))return;JsonObject root=new JsonObject();root.addProperty("username",u);root.addProperty("uuid",id);root.addProperty("profile",profile==null?"":profile);root.addProperty("preset","FARMING");root.addProperty("profit",s.profit());root.addProperty("activeMillis",s.activeMillis());root.addProperty("actions",s.actions());root.addProperty("sessionId",sid);root.add("items",GSON.toJsonTree(s.items()));root.add("pests",GSON.toJsonTree(s.pests()));HttpRequest r=HttpRequest.newBuilder().uri(URI.create(c.endpoint)).timeout(Duration.ofSeconds(15)).header("Content-Type","application/json").header("Authorization","Bearer "+token).POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(root))).build();client.sendAsync(r,HttpResponse.BodyHandlers.ofString()).thenAccept(res->{try{if(res.statusCode()==401&&!retry){token=null;tokenUsername=null;tokenUuid=null;tokenSessionId=null;authenticate(c,u,id,profile,sid,s);}else if(res.statusCode()==429)authBlockedUntil=System.currentTimeMillis()+retry(res);}finally{uploading.set(false);}}).exceptionally(e->{uploading.set(false);return null;});}
+    private long retry(HttpResponse<?> r){try{long s=Long.parseLong(r.headers().firstValue("Retry-After").orElse("0"));if(s>0)return Math.min(s*1000L,MAX_BACKOFF_MS);}catch(Exception ignored){}return authBackoffMs;}
+    private static String authEndpoint(String e){if(e.endsWith("/update"))return e.substring(0,e.length()-7)+"/auth";return e.endsWith("/")?e+"auth":e+"/auth";}
+    public static String newSessionId(){return UUID.randomUUID().toString();}
 }
