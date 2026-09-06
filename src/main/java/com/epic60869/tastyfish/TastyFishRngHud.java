@@ -72,9 +72,9 @@ public final class TastyFishRngHud {
                                int x,
                                int y) {
         float s = scale();
-        graphics.pose().pushPose();
-        graphics.pose().translate(x, y, 0);
-        graphics.pose().scale(s, s, 1.0f);
+        graphics.pose().pushMatrix();
+        graphics.pose().translate((float) x, (float) y);
+        graphics.pose().scale(s, s);
 
         // Compact Nopo/Overflow-style info HUD: subtle dark panel, small yellow
         // category line, bold white result, and a muted value line.
@@ -94,7 +94,7 @@ public final class TastyFishRngHud {
         drawShadowed(graphics, item, 6, 13, 0xFFFFFFFF, true);
         drawShadowed(graphics, price, 6, 28, 0xFFB8B8B8, false);
 
-        graphics.pose().popPose();
+        graphics.pose().popMatrix();
     }
 
     private static void drawShadowed(GuiGraphicsExtractor graphics,
