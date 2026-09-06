@@ -8,7 +8,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -36,14 +35,15 @@ public final class FarmingUploader {
 
         if (token == null || !username.equalsIgnoreCase(tokenUsername)
                 || !uuid.equalsIgnoreCase(tokenUuid) || !sessionId.equals(tokenSessionId)) {
-            authenticate(config, username, uuid, sessionId);
+            authenticate(config, username, uuid, profile, sessionId, snapshot);
             return;
         }
 
         sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
     }
 
-    private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId) {
+    private void authenticate(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
+                              SkysoftSessionReader.Snapshot snapshot) {
         long now = System.currentTimeMillis();
         if (now < authBlockedUntil || !authenticationInProgress.compareAndSet(false, true)) return;
 
@@ -78,6 +78,11 @@ public final class FarmingUploader {
                         authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
                         System.out.println("[TastyFish] Farming authentication successful.");
+
+                        // The first snapshot used to authenticate was being discarded.
+                        // Send that exact snapshot now so the leaderboard starts counting
+                        // from the moment the game launches instead of one upload later.
+                        sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
                     } else if (response.statusCode() == 429) {
                         long retryMs = retryAfterMillis(response);
                         authBlockedUntil = System.currentTimeMillis() + retryMs;
@@ -148,7 +153,7 @@ public final class FarmingUploader {
                     tokenUuid = null;
                     tokenSessionId = null;
                     System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
-                    authenticate(config, username, uuid, sessionId);
+                    authenticate(config, username, uuid, profile, sessionId, null);
                 } else if (response.statusCode() == 429) {
                     long retryMs = retryAfterMillis(response);
                     authBlockedUntil = System.currentTimeMillis() + retryMs;
