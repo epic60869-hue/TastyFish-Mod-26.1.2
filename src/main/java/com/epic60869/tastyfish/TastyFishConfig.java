@@ -14,7 +14,7 @@ public final class TastyFishConfig {
     public int uploadIntervalSeconds = 30;
     public boolean enabled = true;
     public boolean farmingRngEnabled = true;
-    public boolean farmingRngBackground = true;
+    public boolean farmingRngBackground = false;
     public int farmingRngX = 8;
     public int farmingRngY = 8;
     public static TastyFishConfig load(Path path){try{if(Files.notExists(path)){TastyFishConfig c=new TastyFishConfig();c.save(path);return c;}TastyFishConfig c=GSON.fromJson(Files.readString(path,StandardCharsets.UTF_8),TastyFishConfig.class);if(c==null)c=new TastyFishConfig();if(c.uploadIntervalSeconds<10)c.uploadIntervalSeconds=10;return c;}catch(Exception e){System.err.println("[TastyFish] Failed to load config: "+e.getMessage());return new TastyFishConfig();}}
