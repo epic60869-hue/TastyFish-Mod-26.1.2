@@ -1,0 +1,110 @@
+package com.epic60869.tastyfish;
+
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.event.client.player.ClientPlayerBlockBreakEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class TastyFishStandalone {
+    private static final TastyFishStandalone INSTANCE = new TastyFishStandalone();
+    private static final long ACTIVE_GRACE = 2500L;
+    private static final long RNG_SHOW = 5000L;
+    private final Map<String, Long> items = new LinkedHashMap<>();
+    private final Map<String, Long> pests = new LinkedHashMap<>();
+    private final Map<String, Long> inventory = new HashMap<>();
+    private final Map<String, String> ids = new HashMap<>();
+    private final Set<String> drops = new HashSet<>();
+    private long actions, activeMillis, lastActivity, lastTick;
+    private boolean initialized;
+    private Drop activeDrop;
+
+    private TastyFishStandalone() {
+        String[][] crops = {
+            {"Wheat","WHEAT"},{"Enchanted Wheat","ENCHANTED_WHEAT"},{"Carrot","CARROT_ITEM"},{"Enchanted Carrot","ENCHANTED_CARROT"},
+            {"Potato","POTATO_ITEM"},{"Enchanted Potato","ENCHANTED_POTATO"},{"Sugar Cane","SUGAR_CANE"},{"Enchanted Sugar Cane","ENCHANTED_SUGAR_CANE"},
+            {"Cocoa Beans","INK_SACK:3"},{"Enchanted Cocoa Bean","ENCHANTED_COCOA_BEANS"},{"Nether Wart","NETHER_STALK"},{"Enchanted Nether Wart","ENCHANTED_NETHER_STALK"},
+            {"Pumpkin","PUMPKIN"},{"Enchanted Pumpkin","ENCHANTED_PUMPKIN"},{"Melon","MELON"},{"Enchanted Melon","ENCHANTED_MELON"},
+            {"Cactus","CACTUS"},{"Enchanted Cactus","ENCHANTED_CACTUS"},{"Red Mushroom","RED_MUSHROOM"},{"Brown Mushroom","BROWN_MUSHROOM"},
+            {"Enchanted Red Mushroom","ENCHANTED_RED_MUSHROOM"},{"Enchanted Brown Mushroom","ENCHANTED_BROWN_MUSHROOM"},{"Feastfungus","FEASTFUNGUS"},
+            {"Moonflower","MOONFLOWER"},{"Enchanted Moonflower","ENCHANTED_MOONFLOWER"},{"Wild Rose","WILD_ROSE"},{"Enchanted Wild Rose","ENCHANTED_WILD_ROSE"}
+        };
+        for (String[] crop : crops) ids.put(norm(crop[0]), crop[1]);
+        drops.addAll(List.of("Cornucopia","Carrot Zest","Deepfries","Aggourdian","Cane Knot","Melon Juice","Cactus Flower","Designer Coffee Beans","Feastfungus","Botroot","Salted Sunflower Seeds","Crystalized Moonlight","Floral Gelatin","Cropie","Squash","Fermento","Burrowing Spores","Overgrown Grass","Green Bandana","Dedication IV","Flowering Bouquet","Rooted Spores","Fruit Bowl","Atmospheric Filter","Beady Eyes","Clipped Wings","Mantid Claw","Wriggling Larva","Locust Larva","Squeaky Toy","Squeaky Mousemat","Vermin Vaporizer","Synthesis","Evergreen","Quickdraw","Hypercharge","Fire in a Bottle","Iridium","Overclocker 3000","Rabbit Hat","Lucky Clover Core","Bulky Stone","Turbo-Wheat V","Turbo-Carrot V","Turbo-Potato V","Turbo-Pumpkin V","Turbo-Melon V","Turbo-Cocoa V","Turbo-Cactus V","Turbo-Mushrooms V","Turbo-Cane V","Turbo-Warts V","Cultivating X","Cultivating 10","Seasoning"));
+    }
+
+    public static TastyFishStandalone get() { return INSTANCE; }
+
+    public void register() {
+        ClientPlayerBlockBreakEvents.AFTER.register((world, player, pos, state) -> {
+            String block = state.getBlock().toString().toLowerCase(Locale.ROOT);
+            if (block.contains("wheat") || block.contains("carrot") || block.contains("potato") || block.contains("beet") || block.contains("wart") || block.contains("cocoa") || block.contains("cane") || block.contains("pumpkin") || block.contains("melon") || block.contains("cactus") || block.contains("mushroom") || block.contains("crop")) {
+                actions++;
+                activity();
+            }
+        });
+        ClientReceiveMessageEvents.GAME.register((message, overlay) -> handleMessage(message));
+        ClientReceiveMessageEvents.CHAT.register((message, signed, sender, params, timestamp) -> handleMessage(message));
+    }
+
+    public void tick(Minecraft mc) {
+        long now = System.currentTimeMillis();
+        if (lastTick != 0 && lastActivity > 0) activeMillis += Math.max(0, Math.min(now, lastActivity + ACTIVE_GRACE) - lastTick);
+        lastTick = now;
+        if (mc.player == null) { inventory.clear(); initialized = false; return; }
+        Map<String, Long> current = readInventory(mc);
+        if (!initialized) { inventory.clear(); inventory.putAll(current); initialized = true; return; }
+        for (Map.Entry<String, Long> e : current.entrySet()) {
+            long gained = e.getValue() - inventory.getOrDefault(e.getKey(), 0L);
+            String id = ids.get(norm(e.getKey()));
+            if (gained > 0 && id != null) { items.merge(id, gained, Long::sum); activity(); }
+        }
+        inventory.clear(); inventory.putAll(current);
+    }
+
+    public void reset() { items.clear(); pests.clear(); inventory.clear(); actions = activeMillis = 0; lastActivity = lastTick = 0; initialized = false; activeDrop = null; }
+    public Map<String, Long> items() { return Map.copyOf(items); }
+    public Map<String, Long> pests() { return Map.copyOf(pests); }
+    public long actions() { return actions; }
+    public long activeMillis() { return activeMillis; }
+    public double coins() { return 0.0; }
+    public double profit() { double total = 0; for (var e : items.entrySet()) total += ItemPriceResolver.value(e.getKey()) * e.getValue(); return total; }
+    public double profitPerHour() { return activeMillis <= 0 ? 0 : profit() / (activeMillis / 3600000.0); }
+    public List<PestRow> pestRows() { List<PestRow> out = new ArrayList<>(); long recorded = pests.values().stream().mapToLong(Long::longValue).sum(); for (var e : pests.entrySet()) out.add(new PestRow(e.getKey(), e.getValue(), actions == 0 ? 0 : e.getValue() * 100.0 / actions)); long missing = Math.max(0, actions - recorded); if (missing > 0) out.add(new PestRow("Not recorded", missing, actions == 0 ? 0 : missing * 100.0 / actions)); return out; }
+    public Drop activeDrop() { if (activeDrop != null && System.currentTimeMillis() > activeDrop.until()) activeDrop = null; return activeDrop; }
+
+    private void handleMessage(Component message) {
+        String raw = message.getString().replaceAll("§[0-9a-fk-or]", "").trim();
+        String lower = raw.toLowerCase(Locale.ROOT);
+        if (lower.contains("pest") && (lower.contains("killed") || lower.contains("vacuumed") || lower.contains("slain"))) { String name = pestName(raw); pests.merge(name, 1L, Long::sum); actions++; activity(); }
+        Parsed parsed = parseDrop(raw);
+        if (parsed != null) { long price = parsed.name().equalsIgnoreCase("Seasoning") ? -1 : Math.round(ItemPriceResolver.value(parsed.name().toUpperCase(Locale.ROOT).replace(' ', '_'))); activeDrop = new Drop(parsed.amount(), parsed.name(), rarity(raw), price, System.currentTimeMillis() + RNG_SHOW); }
+    }
+
+    private Parsed parseDrop(String raw) {
+        Pattern p = Pattern.compile("(?i)^(?:.*?§.)?(?:RARE CROP!|(?:VERY |CRAZY |PRAY TO RNGESUS |RNGESUS INCARNATE )?RARE DROP!?|VERY RARE DROP!?|CRAZY RARE DROP!?|PRAY TO RNGESUS!?|RNGESUS INCARNATE!?)[ ]*(.+?)\\s*(?:\\(\\+[^)]*\\))?[! ]*$");
+        Matcher m = p.matcher(raw); String item;
+        if (m.find()) item = m.group(1).trim(); else { if (!raw.toLowerCase(Locale.ROOT).contains("rare drop") && !raw.toLowerCase(Locale.ROOT).contains("rngesus")) return null; Matcher o = Pattern.compile("(?i)(?:you (?:found|dropped|got)|you received|drop(?:ped)?[: ])\\s*(?:an? |some )?(.+?)(?:!|$)").matcher(raw); if (!o.find()) return null; item = o.group(1).trim(); }
+        item = item.replaceAll("\\s*\\(\\+[^)]*\\)\\s*$", "").replaceAll("!$", "").trim();
+        int amount = 1; Matcher q = Pattern.compile("(?i)^(?:x(\\d+)\\s+|(\\d+)x\\s+)(.+)$").matcher(item); if (q.matches()) { amount = Integer.parseInt(q.group(1) != null ? q.group(1) : q.group(2)); item = q.group(3); }
+        for (String known : drops) if (item.equalsIgnoreCase(known) || item.toLowerCase(Locale.ROOT).contains(known.toLowerCase(Locale.ROOT))) return new Parsed(amount, known);
+        return null;
+    }
+    private String pestName(String s) { Matcher m = Pattern.compile("(?i)(?:killed|vacuumed|slain)\\s+(?:a\\s+)?(.+?)(?:!|\\.|$)").matcher(s); return m.find() ? m.group(1).trim() : "Pest"; }
+    private String rarity(String s) { String l = s.toLowerCase(Locale.ROOT); if (l.contains("rare crop")) return "RARE CROP"; if (l.contains("crazy rare")) return "CRAZY RARE"; if (l.contains("rngesus")) return "RNGESUS"; return "RARE DROP"; }
+    private void activity() { lastActivity = System.currentTimeMillis(); }
+    private Map<String, Long> readInventory(Minecraft mc) { Map<String, Long> out = new HashMap<>(); try { Field f = field(mc.player.getInventory().getClass(), "items"); f.setAccessible(true); Object raw = f.get(mc.player.getInventory()); if (!(raw instanceof Iterable<?> it)) return out; for (Object stack : it) { Method empty = stack.getClass().getMethod("isEmpty"); if ((Boolean)empty.invoke(stack)) continue; String name = ((Component)stack.getClass().getMethod("getHoverName").invoke(stack)).getString(); long count = ((Number)stack.getClass().getMethod("getCount").invoke(stack)).longValue(); out.merge(name, count, Long::sum); } } catch (Throwable ignored) {} return out; }
+    private static Field field(Class<?> c, String n) throws Exception { while (c != null) { try { return c.getDeclaredField(n); } catch (NoSuchFieldException e) { c = c.getSuperclass(); } } throw new NoSuchFieldException(n); }
+    private static String norm(String s) { return s == null ? "" : s.replaceAll("§[0-9a-fk-or]", "").replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT); }
+
+    public record Snapshot(Map<String,Long> items, Map<String,Long> pests, long activeMillis, long actions, double coins, double profit, boolean valid) {}
+    public Snapshot snapshot() { return new Snapshot(items(), pests(), activeMillis(), actions(), coins(), profit(), true); }
+    public record PestRow(String name,long count,double percentage) {}
+    public record Drop(int amount,String name,String rarity,long unitPrice,long until) {}
+    private record Parsed(int amount,String name) {}
+}
